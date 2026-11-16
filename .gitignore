@@ -1,0 +1,35 @@
+node_modules/
+dist/
+.env
+*.log
+
+test-results/
+playwright-report/
+
+# Personal work belongs outside this repository. Defense in depth only.
+/private-learning/
+/private-notes/
+/docs/learning*.md
+/docs/portfolio.md
+
+# Local credentials, backups and private output
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.zip
+*.bundle
+*.dump
+*.sql.gz
+/backups/
+/outputs/
+/reports/
+/work/
+/secrets/
+/credentials/
+learning*.md
+portfolio.md

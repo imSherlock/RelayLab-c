@@ -1,0 +1,85 @@
+name: checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:integration
+      - run: npm run test:e2e
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate ephemeral development secrets
+        run: |
+          for name in API_READ_TOKEN API_WRITE_TOKEN; do
+            value=$(openssl rand -hex 32)
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+          db_secret=$(openssl rand -hex 24)
+          relay_secret=$(openssl rand -hex 32)
+          echo "::add-mask::$db_secret"
+          echo "::add-mask::$relay_secret"
+          echo "POSTGRES_PASSWORD=$db_secret" >> "$GITHUB_ENV"
+          echo "RELAY_SECRET=$relay_secret" >> "$GITHUB_ENV"
+      - run: docker compose up --build --wait
+      - name: Deliver one event through the container stack
+        run: |
+          curl --fail -s http://127.0.0.1:4000/events -H "Authorization: Bearer $API_WRITE_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: ci-demo' --data '{"ci":true}'
+          for attempt in $(seq 1 30); do
+            if curl --fail -s http://127.0.0.1:4000/events -H "Authorization: Bearer $API_READ_TOKEN" | python3 -c 'import json,sys; assert any(x["state"]=="delivered" for x in json.load(sys.stdin))'; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test browser-tests --workers=1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dashboard-evidence
+          path: test-results/dashboard.jpg
+          retention-days: 7
+      - name: Verify persistence through a coordinated restart
+        run: |
+          docker compose stop api worker receiver
+          for service in api worker receiver; do
+            code=$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -aq "$service")")
+            test "$code" = 0
+          done
+          docker compose restart db
+          docker compose up --wait
+          curl --fail -s http://127.0.0.1:4000/events -H "Authorization: Bearer $API_READ_TOKEN" | python3 -c 'import json,sys; assert any(x["state"]=="delivered" for x in json.load(sys.stdin))'
+      - name: Restore a real logical backup into a separate database
+        run: |
+          docker compose exec -T db pg_dump -U relaylab -d relaylab > /tmp/relaylab-backup.sql
+          docker compose exec -T db createdb -U relaylab relaylab_restore
+          docker compose exec -T db psql -U relaylab -d relaylab_restore -v ON_ERROR_STOP=1 < /tmp/relaylab-backup.sql
+          for table in deliveries delivery_attempts receipts schema_migrations; do
+            docker compose exec -T db psql -U relaylab -d relaylab -Atc "SELECT row_to_json(t)::text FROM $table t ORDER BY row_to_json(t)::text" > /tmp/source-rows
+            docker compose exec -T db psql -U relaylab -d relaylab_restore -Atc "SELECT row_to_json(t)::text FROM $table t ORDER BY row_to_json(t)::text" > /tmp/restored-rows
+            diff /tmp/source-rows /tmp/restored-rows
+          done
+      - if: always()
+        run: docker compose down -v

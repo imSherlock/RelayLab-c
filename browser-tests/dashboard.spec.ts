@@ -1,0 +1,20 @@
+import {test,expect} from '@playwright/test';
+const base='http://127.0.0.1:4000';
+test('dashboard displays the delivered event and handles connection failure',async({page,request})=>{
+ const response=await request.post(base+'/events',{headers:{Authorization:'Bearer '+process.env.API_WRITE_TOKEN,'Idempotency-Key':'browser-ci'},data:{message:'dashboard verification'}});
+ expect(response.status()).toBe(202);
+ const event=await response.json();
+ await page.goto(base);
+ await page.getByLabel('Read token').fill(process.env.API_READ_TOKEN!);
+ await page.getByRole('button',{name:'Connect',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'RelayLab · Delivery monitor'})).toBeVisible();
+ await expect(page.locator('#events')).toContainText(event.id);
+ await expect.poll(async()=>{const r=await request.get(base+'/events',{headers:{Authorization:'Bearer '+process.env.API_READ_TOKEN}});return (await r.json()).find((x:{id:string})=>x.id===event.id)?.state;}).toBe('delivered');
+ await expect(page.locator('#events')).toContainText('delivered');
+ await page.getByLabel('Show').selectOption('delivered');
+ await expect(page.locator('#events')).toContainText(event.id);
+ await expect(page.locator('#count-delivered')).not.toHaveText('0');
+ await page.screenshot({path:'test-results/dashboard.jpg',fullPage:true});
+ await page.route('**/events',route=>route.abort());
+ await expect(page.locator('#events')).toHaveText('Connection unavailable');
+});

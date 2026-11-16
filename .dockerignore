@@ -1,0 +1,31 @@
+node_modules
+.git
+.env
+
+# Keep personal local files out of build contexts.
+docs/learning*.md
+docs/portfolio.md
+private-learning/
+private-notes/
+
+# Local credentials, backups and private output
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.zip
+*.bundle
+*.dump
+*.sql.gz
+/backups/
+/outputs/
+/reports/
+/work/
+/secrets/
+/credentials/
+learning*.md
+portfolio.md

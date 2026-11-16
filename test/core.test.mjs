@@ -1,0 +1,8 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {MemoryStore,sign,verify,tick} from '../src/core.mjs';
+test('deduplicates and rejects conflicting payload',()=>{const s=new MemoryStore();assert.equal(s.enqueue('a',{x:1}).id,s.enqueue('a',{x:1}).id);assert.throws(()=>s.enqueue('a',{x:2}));assert.equal(s.jobs.size,1);});
+test('claim excludes second worker',()=>{const s=new MemoryStore();s.enqueue('a',{});assert.ok(s.claim(0));assert.equal(s.claim(1),null);});
+test('expired lease is recovered and stale worker fenced',()=>{const s=new MemoryStore();s.enqueue('a',{});const a=s.claim(0,10),b=s.claim(11,10);assert.equal(s.finish(a.id,a.token,true,12),false);assert.equal(s.finish(b.id,b.token,true,12),true);});
+test('fails twice then delivers',async()=>{const s=new MemoryStore();const j=s.enqueue('a',{});let t=0,n=0;for(let i=0;i<3;i++){await tick(s,async()=>++n===3,()=>t);t=j.nextAt;}assert.equal(j.state,'delivered');assert.equal(j.attempts,3);});
+test('dead letter after bounded attempts',async()=>{const s=new MemoryStore();const j=s.enqueue('a',{});let t=0;for(let i=0;i<5;i++){await tick(s,async()=>{throw Error('offline')},()=>t);t=j.nextAt;}assert.equal(j.state,'dead');});
+test('authentic, modified, stale and malformed signatures',()=>{const b='{}',ts='1000',sig=sign('secret',ts,b);assert.ok(verify('secret',ts,b,sig,1000000));assert.equal(verify('secret',ts,'x',sig,1000000),false);assert.equal(verify('secret',ts,b,sig,2000000),false);assert.equal(verify('secret',ts,b,'oops',1000000),false);});
+test('invalid payload rejected',()=>{assert.throws(()=>new MemoryStore().enqueue('',{}));assert.throws(()=>new MemoryStore().enqueue('a',[]));});

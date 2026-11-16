@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: relaylab
+      POSTGRES_DB: relaylab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relaylab -d relaylab"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  api:
+    build: .
+    stop_grace_period: 15s
+    environment:
+      DATABASE_URL: postgresql://relaylab:${POSTGRES_PASSWORD}@db:5432/relaylab
+      API_READ_TOKEN: ${API_READ_TOKEN:?set API_READ_TOKEN}
+      API_WRITE_TOKEN: ${API_WRITE_TOKEN:?set API_WRITE_TOKEN}
+      HOST: 0.0.0.0
+    ports: ["127.0.0.1:4000:4000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      db: {condition: service_healthy}
+  receiver:
+    depends_on:
+      db: {condition: service_healthy}
+      api: {condition: service_healthy}
+    build: .
+    stop_grace_period: 15s
+    command: ["node", "--import", "tsx", "src/receiver-main.ts"]
+    environment:
+      DATABASE_URL: postgresql://relaylab:${POSTGRES_PASSWORD}@db:5432/relaylab
+      HOST: 0.0.0.0
+      RELAY_SECRET: ${RELAY_SECRET:?set RELAY_SECRET}
+  worker:
+    build: .
+    stop_grace_period: 15s
+    command: ["node", "--import", "tsx", "src/worker.ts"]
+    environment:
+      DATABASE_URL: postgresql://relaylab:${POSTGRES_PASSWORD}@db:5432/relaylab
+      RELAY_SECRET: ${RELAY_SECRET:?set RELAY_SECRET}
+      RECEIVER_URL: http://receiver:4001/events
+    depends_on:
+      db: {condition: service_healthy}
+      receiver: {condition: service_started}
+volumes:
+  pgdata:
